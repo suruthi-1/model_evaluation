@@ -39,8 +39,8 @@ Building a model is only half the job. This project sets out a complete strategy
 
 ```
 AGRI-5/
-├── Model Evaluation and Reporting Strategy.Rmd                          # Source: code, analysis and report text
-├── Model Evaluation and Reporting Strategy.docx                         # Knitted Word report
+├── Model Evaluation and Reporting Strategy.Rmd      # Source: code, analysis and report text
+├── Model Evaluation and Reporting Strategy.docx     # Knitted Word report
 ├── project.Rproj                      # RStudio project file
 ├── Cover_Infographic.png              # Report cover infographic
 ├── RStudio_Project_Screenshot.png     # Screenshot of the project in RStudio
