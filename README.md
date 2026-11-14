@@ -39,8 +39,8 @@ Building a model is only half the job. This project sets out a complete strategy
 
 ```
 AGRI-5/
-├── model.Rmd                          # Source: code, analysis and report text
-├── model.docx                         # Knitted Word report
+├── Model Evaluation and Reporting Strategy.Rmd                          # Source: code, analysis and report text
+├── Model Evaluation and Reporting Strategy.docx                         # Knitted Word report
 ├── project.Rproj                      # RStudio project file
 ├── Cover_Infographic.png              # Report cover infographic
 ├── RStudio_Project_Screenshot.png     # Screenshot of the project in RStudio
@@ -64,7 +64,7 @@ install.packages(c("rmarkdown", "knitr", "ggplot2", "dplyr"))
 
 1. Clone or download this repository.
 2. Open `project.Rproj` in RStudio.
-3. Open `model.Rmd` and click **Knit** (choose *Knit to Word*), or run:
+3. Open `Model Evaluation and Reporting Strategy.Rmd` and click **Knit** (choose *Knit to Word*), or run:
 
 ```r
 rmarkdown::render("model.Rmd")
@@ -139,7 +139,3 @@ The report includes:
 - Compare random forests and gradient boosting against the linear model.
 - Add a cost-weighted metric and stress-test on drought and flood seasons.
 - Monitor errors each season and retrain on a schedule.
-
-## Author
-
-**Suruthi D**
