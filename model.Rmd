@@ -1,0 +1,417 @@
+---
+title: "Model Evaluation and Reporting Strategy"
+subtitle: "Evaluating and communicating a crop yield forecasting model in agribusiness"
+author: "Suruthi D"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  word_document:
+    toc: true
+    toc_depth: 2
+    fig_width: 6.5
+    fig_height: 4.5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, dpi = 150)
+
+# Install any missing packages automatically, then load them
+needed <- c("ggplot2", "dplyr", "knitr")
+missing_pkgs <- needed[!needed %in% rownames(installed.packages())]
+if (length(missing_pkgs) > 0) {
+  install.packages(missing_pkgs, repos = "https://cloud.r-project.org")
+}
+library(ggplot2)
+library(dplyr)
+library(knitr)
+```
+
+> **Note:** The data, model and results in this document are simulated and hypothetical. They demonstrate how the evaluation and reporting would work, not real farm results.
+
+# 1. Introduction and Objective
+
+Building a predictive model is only half the job. A model is useful to an agribusiness only if its accuracy is measured honestly, its weaknesses are understood, and its results are explained in a way that farm managers, procurement teams and executives can act on.
+
+**Hypothetical model.** The strategy is built around a regression model that predicts crop yield (tonnes per hectare, t/ha) for each farm plot before harvest, using rainfall, temperature, fertilizer use, soil quality and region. Yield forecasts feed procurement, storage, logistics and pricing decisions, so forecast errors have a direct cost.
+
+The objectives of the evaluation are to:
+
+- measure how close predictions are to real outcomes using standard metrics;
+- check that the model is reliable across regions and seasons, not just on average;
+- present results visually so non-technical stakeholders can understand them;
+- summarize performance and recommendations in an executive summary; and
+- state limitations openly and plan further refinement.
+
+# 2. Evaluation Design
+
+## 2.1 Simulated data
+
+Because this is a strategy document, a synthetic dataset of farm plots is generated. The West region is deliberately made noisier so the evaluation has a realistic weak spot to find.
+
+```{r data}
+set.seed(123)
+n <- 700
+
+farms <- data.frame(
+  year         = sample(2018:2024, n, replace = TRUE),
+  region       = sample(c("North", "South", "East", "West", "Central"), n, replace = TRUE),
+  rainfall     = rnorm(n, 800, 150),
+  temperature  = rnorm(n, 27, 2.5),
+  fertilizer   = runif(n, 60, 160),
+  soil_quality = runif(n, 3, 9)
+)
+
+region_noise <- c(North = 0.25, South = 0.35, East = 0.30, West = 0.55, Central = 0.28)
+
+farms$yield <- 0.8 +
+  0.0025 * farms$rainfall -
+  0.04   * (farms$temperature - 27)^2 +
+  0.012  * farms$fertilizer +
+  0.18   * farms$soil_quality +
+  rnorm(n, 0, region_noise[farms$region])
+
+farms$region <- factor(farms$region)
+head(farms) %>% kable(digits = 2)
+```
+
+## 2.2 Data splitting
+
+Crop data is time-ordered, so the split follows time rather than being random. This mimics real use, where the model forecasts a future season from past ones, and prevents information from the future leaking into training.
+
+- **Training set:** seasons 2018 to 2021
+- **Validation set:** season 2022 (for tuning and comparing candidates)
+- **Test set:** seasons 2023 and 2024 (touched only once, for final reporting)
+
+```{r split}
+train <- farms %>% filter(year <= 2021)
+valid <- farms %>% filter(year == 2022)
+test  <- farms %>% filter(year >= 2023)
+
+data.frame(Set = c("Training", "Validation", "Test"),
+           Seasons = c("2018-2021", "2022", "2023-2024"),
+           Plots = c(nrow(train), nrow(valid), nrow(test))) %>% kable()
+```
+
+## 2.3 Model and baseline
+
+Every model is compared with a simple baseline so stakeholders can see the value it adds. The baseline predicts each region's long-term average yield from the training data.
+
+```{r models}
+model <- lm(yield ~ rainfall + temperature + I((temperature - 27)^2) +
+              fertilizer + soil_quality + region, data = train)
+
+baseline_means <- train %>% group_by(region) %>% summarise(base_pred = mean(yield))
+
+test <- left_join(test, baseline_means, by = "region")
+test$pred      <- as.numeric(predict(model, newdata = test))
+test$error     <- test$yield - test$pred
+test$abs_error <- abs(test$error)
+```
+
+# 3. Performance Metrics
+
+## 3.1 Metric definitions
+
+| Metric | Formula | Plain-language meaning |
+|:--|:--|:--|
+| MAE | mean of \|actual - predicted\| | Typical forecast miss, in t/ha |
+| RMSE | square root of mean of (actual - predicted)^2 | Like MAE but penalizes large misses more |
+| R-squared | 1 - SSE / SST | Share of yield variation explained by the model |
+| MAPE | mean of \|error\| / actual, in % | Average error as a percentage |
+| Bias | mean of (predicted - actual) | Systematic over- or under-prediction |
+
+## 3.2 Metric functions
+
+```{r metric-functions}
+mae  <- function(a, p) mean(abs(a - p))
+rmse <- function(a, p) sqrt(mean((a - p)^2))
+r2   <- function(a, p) 1 - sum((a - p)^2) / sum((a - mean(a))^2)
+mape <- function(a, p) mean(abs(a - p) / a) * 100
+bias <- function(a, p) mean(p - a)
+
+evaluate <- function(a, p) {
+  c(MAE = mae(a, p), RMSE = rmse(a, p), R2 = r2(a, p),
+    MAPE_pct = mape(a, p), Bias = bias(a, p))
+}
+```
+
+## 3.3 Worked example
+
+Five plots are used to show how the numbers are calculated.
+
+```{r worked-example}
+ex <- data.frame(Plot = LETTERS[1:5],
+                 Actual = c(3.2, 4.1, 2.8, 3.9, 3.5),
+                 Predicted = c(3.0, 4.4, 2.6, 3.7, 3.9))
+ex$Error <- ex$Actual - ex$Predicted
+ex$Squared_Error <- ex$Error^2
+kable(ex, digits = 2)
+
+round(evaluate(ex$Actual, ex$Predicted), 2)
+```
+
+## 3.4 Results on the test set
+
+```{r overall-metrics}
+overall <- rbind(
+  Model    = evaluate(test$yield, test$pred),
+  Baseline = evaluate(test$yield, test$base_pred)
+)
+kable(round(overall, 3), caption = "Test-set performance: model vs baseline")
+
+improvement <- (1 - overall["Model", "RMSE"] / overall["Baseline", "RMSE"]) * 100
+```
+
+The model reduces RMSE by about **`r round(improvement, 0)`%** compared with the regional-average baseline.
+
+## 3.5 Success thresholds
+
+Targets are agreed with business users before testing, so results are judged against a pre-set standard. The values below are examples.
+
+```{r thresholds}
+thresholds <- data.frame(
+  Metric = c("MAE (t/ha)", "RMSE (t/ha)", "R-squared", "MAPE (%)", "Bias (t/ha)"),
+  Target = c("<= 0.30", "<= 0.40", ">= 0.80", "<= 10", "within +/- 0.05"),
+  Acceptable = c("0.30 - 0.45", "0.40 - 0.55", "0.65 - 0.80", "10 - 15", "within +/- 0.10"),
+  Needs_Action = c("> 0.45", "> 0.55", "< 0.65", "> 15", "beyond +/- 0.10")
+)
+kable(thresholds)
+```
+
+## 3.6 Segment-level evaluation
+
+An overall score can hide local problems, so metrics are also broken down by region.
+
+```{r by-region}
+by_region <- test %>%
+  group_by(Region = region) %>%
+  summarise(Plots = n(),
+            MAE   = mean(abs_error),
+            RMSE  = sqrt(mean(error^2)),
+            Bias  = mean(pred - yield)) %>%
+  mutate(Status = case_when(MAE <= 0.30 ~ "On target",
+                            MAE <= 0.45 ~ "Watch",
+                            TRUE        ~ "Action needed"))
+kable(by_region, digits = 3)
+```
+
+# 4. Visualization Plan
+
+Each chart answers one plain question and can be understood in about ten seconds.
+
+| Chart | Question it answers | Main audience |
+|:--|:--|:--|
+| Predicted vs actual scatter | How close are forecasts to reality? | Everyone |
+| Residual plot | Are errors random or patterned? | Analysts |
+| Error by region bar chart | Where does the model work well or poorly? | Regional managers |
+| Error distribution histogram | How big are typical and worst-case errors? | Risk and finance |
+| Model vs baseline bars | Is the model better than the simple approach? | Executives |
+
+## 4.1 Predicted vs actual
+
+```{r plot-pred-actual, fig.cap="Points close to the dashed line indicate accurate forecasts."}
+ggplot(test, aes(x = yield, y = pred)) +
+  geom_point(colour = "#2E7D32", alpha = 0.7) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey40") +
+  labs(title = "Predicted vs Actual Yield",
+       x = "Actual yield (t/ha)", y = "Predicted yield (t/ha)") +
+  theme_minimal()
+```
+
+## 4.2 Residual plot
+
+```{r plot-residuals, fig.cap="Errors scattered evenly around zero suggest no systematic bias."}
+ggplot(test, aes(x = pred, y = error)) +
+  geom_point(colour = "#F9A825", alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40") +
+  labs(title = "Residual Plot",
+       x = "Predicted yield (t/ha)", y = "Error (actual - predicted)") +
+  theme_minimal()
+```
+
+## 4.3 Error by region
+
+```{r plot-region, fig.cap="Bars are coloured by whether each region meets the 0.30 t/ha target."}
+ggplot(by_region, aes(x = Region, y = MAE, fill = Status)) +
+  geom_col() +
+  geom_hline(yintercept = 0.30, linetype = "dashed", colour = "grey40") +
+  scale_fill_manual(values = c("On target" = "#2E7D32", "Watch" = "#F9A825",
+                               "Action needed" = "#C62828")) +
+  labs(title = "Average Error by Region",
+       y = "Mean absolute error (t/ha)") +
+  theme_minimal()
+```
+
+## 4.4 Error distribution
+
+```{r plot-hist, fig.cap="A narrow, centred shape is good; long tails mean occasional large misses."}
+ggplot(test, aes(x = error)) +
+  geom_histogram(bins = 25, fill = "#2E7D32", colour = "white") +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
+  labs(title = "Distribution of Forecast Errors",
+       x = "Error (actual - predicted, t/ha)", y = "Number of plots") +
+  theme_minimal()
+```
+
+## 4.5 Model vs baseline
+
+```{r plot-baseline, fig.cap="A lower bar means smaller forecast error."}
+cmp <- data.frame(Method = c("Baseline", "Model"),
+                  RMSE = c(overall["Baseline", "RMSE"], overall["Model", "RMSE"]))
+ggplot(cmp, aes(x = Method, y = RMSE, fill = Method)) +
+  geom_col(width = 0.5, show.legend = FALSE) +
+  scale_fill_manual(values = c(Baseline = "grey60", Model = "#2E7D32")) +
+  labs(title = "Forecast Error: Model vs Baseline", y = "RMSE (t/ha)") +
+  theme_minimal()
+```
+
+## 4.6 Design principles for non-expert audiences
+
+- One message per chart, with the takeaway in the title.
+- Use business units (t/ha, or rupees of impact) instead of abstract statistics.
+- Use a consistent colour code: green on target, amber watch, red action needed.
+- Always show a reference line (perfect prediction or target).
+- Keep charts uncluttered, and use colour-blind-friendly palettes and readable fonts.
+- Show uncertainty, since forecasts are estimates and not guarantees.
+
+# 5. Reporting Strategy
+
+## 5.1 Tailoring the report to stakeholders
+
+| Stakeholder | What they need to know | Format | Frequency |
+|:--|:--|:--|:--|
+| Executives | Is the model reliable enough for decisions? | One-page summary with 3-4 charts | Each season |
+| Regional managers | How accurate is it for my region? | Dashboard with regional views | Monthly in season |
+| Procurement and logistics | How much error should I plan for? | Forecast ranges and error bands | Before each buying cycle |
+| Agronomists and data team | Why does the model behave this way? | Full technical report | After every retraining |
+
+## 5.2 Structure of the full report
+
+1. Executive summary (one page)
+2. Model and data overview
+3. Evaluation method: splits, validation, baselines
+4. Results: headline metrics against targets
+5. Segment analysis by region and season
+6. Error analysis: residuals and worst cases
+7. Limitations and risks
+8. Recommendations and next steps
+9. Appendix: detailed tables and glossary
+
+## 5.3 Executive summary (auto-filled from the results)
+
+```{r exec-values, include=FALSE}
+m <- overall["Model", ]
+worst <- by_region %>% arrange(desc(MAE)) %>% slice(1)
+n_ok  <- sum(by_region$Status == "On target")
+```
+
+**Bottom line.** The model meets the 0.30 t/ha accuracy target in `r n_ok` of `r nrow(by_region)` regions and is suitable for procurement and storage planning there.
+
+**Accuracy.** On unseen test seasons, forecasts were off by an average of `r round(m["MAE"], 2)` t/ha (MAE), about `r round(m["MAPE_pct"], 1)`% of actual yield. The model explains `r round(m["R2"] * 100, 0)`% of the variation in yield between plots (R-squared = `r round(m["R2"], 2)`).
+
+**Value added.** Compared with the regional-average baseline, RMSE falls by about `r round(improvement, 0)`% (`r round(m["RMSE"], 2)` vs `r round(overall["Baseline", "RMSE"], 2)` t/ha).
+
+**Watch-out.** The **`r worst$Region`** region has the largest average error (`r round(worst$MAE, 2)` t/ha).
+
+**Recommendation.** Approve for planning use in on-target regions; treat forecasts for `r worst$Region` with caution until the model is improved with better local data.
+
+**Next steps.** Add irrigation and satellite vegetation data, retrain before next season, and re-test with the same metrics and targets.
+
+## 5.4 Communication guidelines
+
+- Lead with the conclusion and the decision it supports, then give the evidence.
+- Replace jargon with plain language and define technical terms once in the appendix.
+- Translate errors into business impact, such as tonnes of stock over- or under-ordered.
+- Be upfront about uncertainty and where the model should not be trusted.
+- Use the same metrics, targets and chart styles every season.
+
+# 6. Interpreting Results and Recommending Improvements
+
+| What the evaluation shows | Likely cause | Recommended action |
+|:--|:--|:--|
+| High error on training and test data | Model too simple or inputs missing | Add features (irrigation, pests, satellite index); try a more flexible model |
+| Low training error, high test error | Overfitting | Simplify, regularize, add data, use stricter cross-validation |
+| RMSE much larger than MAE | A few very large errors | Investigate outliers and extreme-weather seasons |
+| Consistent over- or under-prediction | Conditions shifted, or skewed data | Recalibrate and retrain on recent seasons |
+| One region or crop performs poorly | Too little or different local data | Collect more local data or build a regional model |
+| Curved or funnel-shaped residuals | Relationship not captured | Transform variables, add interactions, try non-linear models |
+
+A quick check for the second row, comparing training and test error:
+
+```{r overfit-check}
+train_pred <- predict(model, newdata = train)
+data.frame(Set = c("Training", "Test"),
+           RMSE = c(rmse(train$yield, train_pred), rmse(test$yield, test$pred))) %>%
+  kable(digits = 3)
+```
+
+# 7. Limitations and Further Refinement
+
+## 7.1 Potential limitations
+
+- **Data quality and gaps:** missing, late or inaccurate records and inconsistent units.
+- **Limited history:** rare events such as severe droughts or floods may be untested.
+- **Changing conditions:** climate change, new varieties and practices cause concept drift.
+- **Spatial and temporal correlation:** neighbouring farms and consecutive seasons are related, so random splits look too optimistic.
+- **Metric limits:** R-squared can look high even when absolute errors are large; MAPE misbehaves for low yields; RMSE is sensitive to outliers.
+- **Unequal cost of errors:** under- and over-forecasting rarely cost the same, yet standard metrics treat them alike.
+- **Representativeness:** results may not transfer to smallholders or unseen regions.
+- **Uncertainty:** a single predicted number can give a false sense of precision.
+
+## 7.2 Suggestions for refinement
+
+- Enrich the data with satellite imagery, soil sensors, irrigation, and pest and disease records.
+- Report prediction intervals (for example 3.4 t/ha, likely between 3.0 and 3.8).
+- Add a cost-weighted metric reflecting the financial cost of over- and under-forecasting.
+- Compare linear models, random forests and gradient boosting, and ensemble the best.
+- Build targeted models for weak regions or crops.
+- Stress-test on drought, flood and heat-wave seasons.
+- Use feature importance or SHAP values so agronomists can sanity-check the model.
+
+A simple example of a prediction interval from the fitted model:
+
+```{r interval}
+pred_int <- as.data.frame(predict(model, newdata = head(test, 5),
+                                  interval = "prediction", level = 0.90))
+interval_table <- data.frame(Plot      = 1:5,
+                             Actual    = head(test$yield, 5),
+                             Predicted = pred_int$fit,
+                             Lower_90  = pred_int$lwr,
+                             Upper_90  = pred_int$upr)
+kable(interval_table, digits = 2)
+```
+
+## 7.3 Ongoing monitoring
+
+Forecasts are compared with actual harvest results each season, metrics are tracked on a dashboard, and alerts fire if error exceeds the agreed thresholds. The model is retrained at least once per season and re-evaluated with the same procedure so results stay comparable and drift is caught early.
+
+# 8. Evaluation Workflow and Timeline
+
+| Step | Activity | Output | Timing |
+|:-:|:--|:--|:--|
+| 1 | Agree metrics and thresholds with stakeholders | Signed-off target table | Before modelling |
+| 2 | Prepare test data and baselines | Locked test set, baseline scores | Week 1 |
+| 3 | Run validation and calculate metrics | Overall and segment metric tables | Week 2 |
+| 4 | Error analysis and diagnostics | Residual plots, worst-case review | Week 2 |
+| 5 | Build visuals and dashboard | Chart set and dashboard | Week 3 |
+| 6 | Write executive summary and full report | Audience-specific reports | Week 3 |
+| 7 | Stakeholder review and decisions | Approval and refinement plan | Week 4 |
+| 8 | Monitor and re-evaluate | Seasonal re-evaluation report | Each season |
+
+# 9. Conclusion
+
+This strategy gives a methodical way to judge a yield forecasting model and explain the verdict clearly. A fair test design makes results trustworthy, a balanced set of metrics shows both typical and worst-case performance, consistent visuals and audience-specific reports turn numbers into decisions, and an honest account of limitations with a monitoring plan keeps the model useful as conditions change.
+
+The key question moves from "how accurate is the model?" to "where can we rely on it, where should we be careful, and what should we improve next?"
+
+# Appendix: Glossary
+
+| Term | Simple explanation |
+|:--|:--|
+| Residual | Gap between the real value and the prediction for one plot |
+| Overfitting | A model memorizes training data and does poorly on new data |
+| Cross-validation | Testing on several slices of data for a more reliable score |
+| Baseline | A very simple forecast used as a benchmark |
+| Bias | Consistent tendency to predict too high or too low |
+| Concept drift | Real-world change that makes past learning less accurate |
+| Prediction interval | Range expected to contain the true value at a stated confidence |
+| t/ha | Tonnes per hectare |
